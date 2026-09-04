@@ -75,7 +75,12 @@ async def on_message(message):
                     await message.add_reaction("❌")
                     await bot.process_commands(message)
                     return
-                elif last_checkin == today or last_checkin == today - timedelta(days=1):
+                elif last_checkin == today:
+                    print("-> 今日已打過卡且已超過 12 小時，只更新最後打卡時間，不增加天數")
+                    supabase.table("sleep_tracker").update({
+                        "last_checkin_at": now.isoformat()
+                    }).eq("user_id", user_id).execute()
+                elif last_checkin == today - timedelta(days=1):
                     print("-> 連勝 +1")
                     new_streak = data["current_streak"] + 1
                     max_streak = max(new_streak, data["max_streak"])
@@ -156,6 +161,8 @@ async def adjust(
             update_data["last_checkin_at"] = datetime.combine(
                 parsed_date, datetime.min.time()
             ).isoformat()
+        else:
+            update_data["last_checkin_at"] = datetime.now().isoformat()
 
         existing = supabase.table("sleep_tracker").select("user_id").eq(
             "user_id", str(member.id)
