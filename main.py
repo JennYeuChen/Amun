@@ -1,46 +1,106 @@
 import os
-from threading import Thread
-from flask import Flask
+import re
+from datetime import datetime, timedelta
 import discord
 from discord.ext import commands
+from supabase import create_client, Client
 
-# 1. 建立 Flask Web Server 用於 Keep-Alive
-app = Flask('')
+# --- 1. 設定 Discord 與 Supabase 憑證 ---
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-@app.route('/')
-def home():
-    return "Bot is alive!"
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def run_flask():
-    # Render 會自動指定 PORT 環境變數，若無則預設 8080
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.daemon = True
-    t.start()
-
-# 2. 設定 Discord Bot
 intents = discord.Intents.default()
-intents.message_content = True  # 開啟訊息內容權限
-
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
     print(f"機器人已成功上線：{bot.user}")
 
-@bot.command()
-async def ping(ctx):
-    await ctx.send("Pong!")
+# --- 2. 自動監聽訊息與系統日期判定 ---
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
 
-# 3. 啟動 Web 伺服器與 Bot
-if __name__ == "__main__":
-    keep_alive()  # 背景啟動 Flask
+    # 正則表達式匹配：包含「第X天」、「第 X 天」或「Day X」
+    pattern = r"(第\s*\d+\s*天|Day\s*\d+)"
+    if re.search(pattern, message.content, re.IGNORECASE):
+        user_id = str(message.author.id)
+        today = datetime.now().date()
+        
+        # 查詢使用者在 Supabase 中的資料
+        res = supabase.table("sleep_tracker").select("*").eq("user_id", user_id).execute()
+        user_data = res.data
+
+        if not user_data:
+            # 首次打卡：建立新紀錄
+            new_record = {
+                "user_id": user_id,
+                "current_streak": 1,
+                "max_streak": 1,
+                "total_days": 1,
+                "last_checkin": str(today)
+            }
+            supabase.table("sleep_tracker").insert(new_record).execute()
+            await message.add_reaction("✅")
+        else:
+            data = user_data[0]
+            last_checkin = datetime.strptime(data["last_checkin"], "%Y-%m-%d").date()
+
+            # 情況 A：今天已經打過卡 ➔ 忽略
+            if last_checkin == today:
+                pass
+            # 情況 B：昨天有打卡 ➔ 連勝 +1
+            elif last_checkin == today - timedelta(days=1):
+                new_streak = data["current_streak"] + 1
+                max_streak = max(new_streak, data["max_streak"])
+                
+                update_data = {
+                    "current_streak": new_streak,
+                    "max_streak": max_streak,
+                    "total_days": data["total_days"] + 1,
+                    "last_checkin": str(today)
+                }
+                supabase.table("sleep_tracker").update(update_data).eq("user_id", user_id).execute()
+                await message.add_reaction("✅")
+            # 情況 C：超過一天沒打卡 ➔ 連勝重置為 1
+            else:
+                update_data = {
+                    "current_streak": 1,
+                    "total_days": data["total_days"] + 1,
+                    "last_checkin": str(today)
+                }
+                supabase.table("sleep_tracker").update(update_data).eq("user_id", user_id).execute()
+                await message.add_reaction("✅")
+
+    # 確保其他指令能正常運作
+    await bot.process_commands(message)
+
+# --- 3. 個人名片指令 /profile ---
+@bot.command(name="profile")
+async def profile(ctx):
+    user_id = str(ctx.author.id)
+    res = supabase.table("sleep_tracker").select("*").eq("user_id", user_id).execute()
     
-    token = os.getenv("DISCORD_TOKEN")
-    if token:
-        bot.run(token)
-    else:
-        print("錯誤：找不到 DISCORD_TOKEN 環境變數！")
+    if not res.data:
+        await ctx.send("你還沒有任何打卡紀錄喔！在頻道發送「第一天」即可開始打卡。")
+        return
+        
+    data = res.data[0]
+    
+    embed = discord.Embed(
+        title=f"🌙 {ctx.author.display_name} 的早睡打卡名片",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="🔥 當前連勝", value=f"`{data['current_streak']} 天`", inline=True)
+    embed.add_field(name="🏆 最高紀錄", value=f"`{data['max_streak']} 天`", inline=True)
+    embed.add_field(name="📅 總打卡數", value=f"`{data['total_days']} 天`", inline=True)
+    embed.set_footer(text=f"上次打卡日期：{data['last_checkin']}")
+    
+    await ctx.send(embed=embed)
+
+bot.run(DISCORD_TOKEN)
