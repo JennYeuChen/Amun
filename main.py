@@ -40,7 +40,8 @@ async def on_message(message):
         print(f"[{datetime.now()}] 收到打卡訊息：{message.content} (來自: {message.author})")
 
         user_id = str(message.author.id)
-        today = datetime.now().date()
+        now = datetime.now()
+        today = now.date()
 
         try:
             # 查詢使用者資料
@@ -54,16 +55,27 @@ async def on_message(message):
                     "current_streak": 1,
                     "max_streak": 1,
                     "total_days": 1,
-                    "last_checkin": str(today)
+                    "last_checkin": str(today),
+                    "last_checkin_at": now.isoformat()
                 }
                 supabase.table("sleep_tracker").insert(new_record).execute()
             else:
                 data = user_data[0]
                 last_checkin = datetime.strptime(data["last_checkin"], "%Y-%m-%d").date()
+                last_checkin_at = data.get("last_checkin_at")
 
-                if last_checkin == today:
-                    print("-> 今天已打過卡 (更新時間並給予反應測試)")
-                elif last_checkin == today - timedelta(days=1):
+                # 舊資料沒有時間欄位時，以 last_checkin 日期的午夜作為相容預設值。
+                if last_checkin_at:
+                    last_checkin_time = datetime.fromisoformat(last_checkin_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                else:
+                    last_checkin_time = datetime.combine(last_checkin, datetime.min.time())
+
+                if now - last_checkin_time < timedelta(hours=12):
+                    print("-> 12 小時內已打過卡，拒絕此次打卡 ❌")
+                    await message.add_reaction("❌")
+                    await bot.process_commands(message)
+                    return
+                elif last_checkin == today or last_checkin == today - timedelta(days=1):
                     print("-> 連勝 +1")
                     new_streak = data["current_streak"] + 1
                     max_streak = max(new_streak, data["max_streak"])
@@ -71,7 +83,8 @@ async def on_message(message):
                         "current_streak": new_streak,
                         "max_streak": max_streak,
                         "total_days": data["total_days"] + 1,
-                        "last_checkin": str(today)
+                        "last_checkin": str(today),
+                        "last_checkin_at": now.isoformat()
                     }
                     supabase.table("sleep_tracker").update(update_data).eq("user_id", user_id).execute()
                 else:
@@ -79,7 +92,8 @@ async def on_message(message):
                     update_data = {
                         "current_streak": 1,
                         "total_days": data["total_days"] + 1,
-                        "last_checkin": str(today)
+                        "last_checkin": str(today),
+                        "last_checkin_at": now.isoformat()
                     }
                     supabase.table("sleep_tracker").update(update_data).eq("user_id", user_id).execute()
 
@@ -115,5 +129,59 @@ async def profile(ctx):
     embed.set_footer(text=f"上次打卡日期：{data['last_checkin']}")
     
     await ctx.send(embed=embed)
+
+
+# --- 4. 管理員調整其他使用者數據 ---
+@bot.command(name="adjust")
+@commands.has_permissions(administrator=True)
+async def adjust(
+    ctx,
+    member: discord.Member,
+    current_streak: int,
+    max_streak: int,
+    total_days: int,
+    last_checkin: str = None
+):
+    """用法：!adjust @使用者 當前連勝 最高連勝 總天數 [YYYY-MM-DD]"""
+    try:
+        update_data = {
+            "current_streak": current_streak,
+            "max_streak": max_streak,
+            "total_days": total_days
+        }
+
+        if last_checkin:
+            parsed_date = datetime.strptime(last_checkin, "%Y-%m-%d").date()
+            update_data["last_checkin"] = str(parsed_date)
+            update_data["last_checkin_at"] = datetime.combine(
+                parsed_date, datetime.min.time()
+            ).isoformat()
+
+        existing = supabase.table("sleep_tracker").select("user_id").eq(
+            "user_id", str(member.id)
+        ).execute()
+        if not existing.data:
+            await ctx.send(f"找不到 {member.mention} 的打卡資料。")
+            return
+
+        supabase.table("sleep_tracker").update(update_data).eq(
+            "user_id", str(member.id)
+        ).execute()
+
+        print(f"[管理員調整] {ctx.author} 更新了 {member} 的打卡資料：{update_data}")
+        await ctx.send(f"已更新 {member.mention} 的打卡資料。")
+    except ValueError:
+        await ctx.send("日期格式錯誤，請使用 `YYYY-MM-DD`。")
+    except Exception as e:
+        print(f"❌ 調整數據時發生錯誤: {e}")
+        await ctx.send("調整數據失敗，請查看主機 Log。")
+
+
+@adjust.error
+async def adjust_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("只有管理員可以調整其他使用者的數據。")
+    elif isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument)):
+        await ctx.send("用法：`!adjust @使用者 當前連勝 最高連勝 總天數 [YYYY-MM-DD]`")
 
 bot.run(DISCORD_TOKEN)
