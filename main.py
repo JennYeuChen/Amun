@@ -42,6 +42,14 @@ async def on_message(message):
         user_id = str(message.author.id)
         now = datetime.now()
         today = now.date()
+        user_display_name = message.author.display_name
+        user_avatar_url = str(
+            message.author.display_name_avatar.url
+            if hasattr(message.author, "display_name_avatar")
+            else message.author.avatar.url
+            if message.author.avatar
+            else ""
+        )
 
         try:
             # 查詢使用者資料
@@ -56,7 +64,9 @@ async def on_message(message):
                     "max_streak": 1,
                     "total_days": 1,
                     "last_checkin": str(today),
-                    "last_checkin_at": now.isoformat()
+                    "last_checkin_at": now.isoformat(),
+                    "display_name": user_display_name,
+                    "avatar_url": user_avatar_url
                 }
                 supabase.table("sleep_tracker").insert(new_record).execute()
             else:
@@ -77,9 +87,12 @@ async def on_message(message):
                     return
                 elif last_checkin == today:
                     print("-> 今日已打過卡且已超過 12 小時，只更新最後打卡時間，不增加天數")
-                    supabase.table("sleep_tracker").update({
-                        "last_checkin_at": now.isoformat()
-                    }).eq("user_id", user_id).execute()
+                    update_data = {
+                        "last_checkin_at": now.isoformat(),
+                        "display_name": user_display_name,
+                        "avatar_url": user_avatar_url
+                    }
+                    supabase.table("sleep_tracker").update(update_data).eq("user_id", user_id).execute()
                 elif last_checkin == today - timedelta(days=1):
                     print("-> 連勝 +1")
                     new_streak = data["current_streak"] + 1
@@ -89,7 +102,9 @@ async def on_message(message):
                         "max_streak": max_streak,
                         "total_days": data["total_days"] + 1,
                         "last_checkin": str(today),
-                        "last_checkin_at": now.isoformat()
+                        "last_checkin_at": now.isoformat(),
+                        "display_name": user_display_name,
+                        "avatar_url": user_avatar_url
                     }
                     supabase.table("sleep_tracker").update(update_data).eq("user_id", user_id).execute()
                 else:
@@ -98,7 +113,9 @@ async def on_message(message):
                         "current_streak": 1,
                         "total_days": data["total_days"] + 1,
                         "last_checkin": str(today),
-                        "last_checkin_at": now.isoformat()
+                        "last_checkin_at": now.isoformat(),
+                        "display_name": user_display_name,
+                        "avatar_url": user_avatar_url
                     }
                     supabase.table("sleep_tracker").update(update_data).eq("user_id", user_id).execute()
 
