@@ -123,15 +123,20 @@ async def profile(ctx):
         return
         
     data = res.data[0]
-    
+
+    # 優先讀取日期欄位，避免資料欄位缺少時造成錯誤。
+    last_date = data.get("last_checkin") or data.get("last_checkin_at", "無紀錄")
+    if "T" in str(last_date):
+        last_date = str(last_date).split("T")[0]
+
     embed = discord.Embed(
         title=f"🌙 {ctx.author.display_name} 的早睡打卡名片",
         color=discord.Color.blue()
     )
-    embed.add_field(name="🔥 當前連勝", value=f"`{data['current_streak']} 天`", inline=True)
-    embed.add_field(name="🏆 最高紀錄", value=f"`{data['max_streak']} 天`", inline=True)
-    embed.add_field(name="📅 總打卡數", value=f"`{data['total_days']} 天`", inline=True)
-    embed.set_footer(text=f"上次打卡日期：{data['last_checkin']}")
+    embed.add_field(name="🔥 當前連勝", value=f"`{data.get('current_streak', 0)} 天`", inline=True)
+    embed.add_field(name="🏆 最高紀錄", value=f"`{data.get('max_streak', 0)} 天`", inline=True)
+    embed.add_field(name="📅 總打卡數", value=f"`{data.get('total_days', 0)} 天`", inline=True)
+    embed.set_footer(text=f"上次打卡日期：{last_date}")
     
     await ctx.send(embed=embed)
 
