@@ -34,56 +34,61 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
-    # 正則表達式：支援阿拉伯數字 (\d+) 與中文數字 ([一二三四五六七八九十百]+)
+    # 正則表達式：支援阿拉伯數字與中文數字
     pattern = r"(第\s*(\d+|[一二三四五六七八九十百]+)\s*天|Day\s*\d+)"
     if re.search(pattern, message.content, re.IGNORECASE):
+        print(f"[{datetime.now()}] 收到打卡訊息：{message.content} (來自: {message.author})")
+
         user_id = str(message.author.id)
         today = datetime.now().date()
-        
-        # 查詢使用者在 Supabase 中的資料
-        res = supabase.table("sleep_tracker").select("*").eq("user_id", user_id).execute()
-        user_data = res.data
 
-        if not user_data:
-            # 首次打卡：建立新紀錄
-            new_record = {
-                "user_id": user_id,
-                "current_streak": 1,
-                "max_streak": 1,
-                "total_days": 1,
-                "last_checkin": str(today)
-            }
-            supabase.table("sleep_tracker").insert(new_record).execute()
-            await message.add_reaction("✅")
-        else:
-            data = user_data[0]
-            last_checkin = datetime.strptime(data["last_checkin"], "%Y-%m-%d").date()
+        try:
+            # 查詢使用者資料
+            res = supabase.table("sleep_tracker").select("*").eq("user_id", user_id).execute()
+            user_data = res.data
 
-            # 情況 A：今天已經打過卡 ➔ 忽略
-            if last_checkin == today:
-                pass
-            # 情況 B：昨天有打卡 ➔ 連勝 +1
-            elif last_checkin == today - timedelta(days=1):
-                new_streak = data["current_streak"] + 1
-                max_streak = max(new_streak, data["max_streak"])
-                
-                update_data = {
-                    "current_streak": new_streak,
-                    "max_streak": max_streak,
-                    "total_days": data["total_days"] + 1,
-                    "last_checkin": str(today)
-                }
-                supabase.table("sleep_tracker").update(update_data).eq("user_id", user_id).execute()
-                await message.add_reaction("✅")
-            # 情況 C：超過一天沒打卡 ➔ 連勝重置為 1
-            else:
-                update_data = {
+            if not user_data:
+                print("-> 新使用者打卡")
+                new_record = {
+                    "user_id": user_id,
                     "current_streak": 1,
-                    "total_days": data["total_days"] + 1,
+                    "max_streak": 1,
+                    "total_days": 1,
                     "last_checkin": str(today)
                 }
-                supabase.table("sleep_tracker").update(update_data).eq("user_id", user_id).execute()
-                await message.add_reaction("✅")
+                supabase.table("sleep_tracker").insert(new_record).execute()
+            else:
+                data = user_data[0]
+                last_checkin = datetime.strptime(data["last_checkin"], "%Y-%m-%d").date()
+
+                if last_checkin == today:
+                    print("-> 今天已打過卡 (更新時間並給予反應測試)")
+                elif last_checkin == today - timedelta(days=1):
+                    print("-> 連勝 +1")
+                    new_streak = data["current_streak"] + 1
+                    max_streak = max(new_streak, data["max_streak"])
+                    update_data = {
+                        "current_streak": new_streak,
+                        "max_streak": max_streak,
+                        "total_days": data["total_days"] + 1,
+                        "last_checkin": str(today)
+                    }
+                    supabase.table("sleep_tracker").update(update_data).eq("user_id", user_id).execute()
+                else:
+                    print("-> 中斷，連勝重置為 1")
+                    update_data = {
+                        "current_streak": 1,
+                        "total_days": data["total_days"] + 1,
+                        "last_checkin": str(today)
+                    }
+                    supabase.table("sleep_tracker").update(update_data).eq("user_id", user_id).execute()
+
+            # 無論情況如何，只要符合格式就一定點擊 ✅
+            await message.add_reaction("✅")
+            print("-> 成功按讚 ✅")
+
+        except Exception as e:
+            print(f"❌ 發生錯誤: {e}")
 
     # 確保其他指令能正常運作
     await bot.process_commands(message)
